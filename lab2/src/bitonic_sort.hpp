@@ -1,8 +1,6 @@
 #ifndef BITONIC_SORT_HPP
 #define BITONIC_SORT_HPP
 
-#include <iostream>
-#include <string>
 #include <vector>
 #include <iterator>
 
@@ -11,104 +9,110 @@
 
 namespace bitonic_sort {
 
-    namespace detail {
+namespace detail {
 
-        enum class SEQ_TYPE {
-            INCREASE,
-            DECREASE
-        };
+    enum class direction {
+        UP,
+        DOWN
+    };
 
-        template<typename it>
-        struct sort_arg {
-            pthread_barrier_t *barrier;
-            it first;
-            it last;
-            int rank;
-            int threadc;
-            int arr_len;
+    template<typename it>
+    struct sort_arg {
+        pthread_barrier_t *barrier_;
+        it first_;
+        it last_;
+        int thread_rank_;
+        int thread_count_;
+        int arr_len_;
 
-        public:
-            sort_arg(pthread_barrier_t *bar, it fst, it lst,
-                     int rank_, int threadc_, int arr_len_) :
-                     barrier(bar), first(fst), last(lst),
-                     rank(rank_), threadc(threadc_), arr_len(arr_len_) {}
-        };
+    public:
+        sort_arg(pthread_barrier_t *barrier, it first, it last,
+                int thread_rank, int thread_count, int arr_len) :
+            barrier_(barrier),
+            first_(first),
+            last_(last),
+            thread_rank_(thread_rank),
+            thread_count_(thread_count),
+            arr_len_(arr_len) {}
+    };
 
-        template<typename comp, typename it>
-        void sort_step(it start, it stop, int comp_len, SEQ_TYPE dir, int sort_size) {
-            it curr = start;
-            // std::string a = "start=" + std::to_string(*start) + "\n";
-            // std::cout << a;
-            int pos = 0;
-            while (curr != stop) {
-                it half = curr + (comp_len / 2);
-                it end  = curr + comp_len;
-                pos += comp_len;
-                while (half != end) {
-                    // std::cout << std::string("sort_step: ") + "rank=" + std::to_string(rank) + " half=" + std::to_string(*half) + " comp_len=" + std::to_string(comp_len) + "\n";
-                    bool cond_comp = comp()(*curr, *half);
-                    bool cond_dir  = (dir == SEQ_TYPE::DECREASE);
-                    // bool cond = (cond_comp && cond_dir) || !(cond_comp || cond_dir); // @TODO rewrite
-                    bool cond = (cond_comp == cond_dir);
-                    if (cond) {
-                        std::iter_swap(curr, half);
-                        // std::cout << "rank=" + std::to_string(rank) + " swapped" + "\n";
-                    }
-                    ++curr; ++half;
-                }
-                curr = end;
-                if (pos >= sort_size) {
-                    if (SEQ_TYPE::INCREASE == dir) dir = SEQ_TYPE::DECREASE;
-                    else dir = SEQ_TYPE::INCREASE;
-                    pos = 0;
-                }
-            }
-        }
+    template<typename it>
+    std::pair<int, int> get_range(sort_arg<it> *arg, int block_width) {
+        int elems_per_thread = arg->arr_len_ / arg->thread_count_;
+        int width = std::max(block_width, elems_per_thread);
+        int beg = arg->thread_rank_ * width;
+        int end = beg + width;
+        return {beg, end};
+    }
 
-        // may be not inline
-        inline std::pair<int, int> get_range(int threadc, int arr_len, int rank, int comp_len) {
-            int part_len = arr_len / threadc;
-            if (comp_len <= part_len) {
-                int beg = rank * part_len;
-                int end = beg + part_len;
-                return {beg, end};
-            } else {
-                int beg = rank * comp_len;
-                int end = beg + comp_len;
-                return {beg, end};
-            }
-        }
+    inline direction get_range_start_dir(int range_start, int block_width) {
+        int blocks_in_range = range_start / block_width;
+        return (blocks_in_range % 2) == 0 ? direction::UP : direction::DOWN;
+    }
 
-        template<typename comp, typename it>
-        void* sort_executor(void *args) {
-            sort_arg<it>* arg = static_cast<sort_arg<it>*>(args);
-
-            for (int i = 2; i <= arg->arr_len; i *= 2) {
-                for (int j = i; j > 1; j /= 2) {
-                    // std::cout << "thread=" + std::to_string(arg->rank) + " i=" + std::to_string(i) + " j=" + std::to_string(j) + "\n";
-                    std::pair<int, int> range = get_range(arg->threadc,
-                                                          arg->arr_len,
-                                                          arg->rank,
-                                                          j);
-                    // std::string a = "thread=" + std::to_string(arg->rank) + " start=" + std::to_string(range.first) + "\n";
-                    // std::cout << a;
-                    if (range.first < arg->arr_len) {
-                        SEQ_TYPE dir = ((range.first / i) % 2) == 1 ? SEQ_TYPE::DECREASE : SEQ_TYPE::INCREASE;
-                        std::cout << "executer: rank=" + std::to_string(arg->rank) + " range.first=" + std::to_string(range.first) + " dir=" + std::to_string((int)dir) + "\n";
-                        sort_step<comp, it>(arg->first + range.first, arg->first + range.second, j, dir, i);
-                    }
-                    pthread_barrier_wait(arg->barrier);
-                }
-            }
-
-            return nullptr;
-        }
-
-    } // <-- namespace detail
+    inline direction swap_direction(direction dir) {
+        return (direction::UP == dir) ? direction::DOWN : direction::UP;
+    }
 
     template<typename comp, typename it>
-    void bitonic_sort(it first, it last, int threadc) {
+    void sort_step(it curr, it half, it sort_end, direction dir) {
+        while(half != sort_end) {
+            bool cond_comp = comp()(*curr, *half);
+            bool cond_dir  = (dir == direction::DOWN);
+            bool cond = (cond_comp == cond_dir);
+            if (cond) std::iter_swap(curr, half);
+            ++curr; ++half;
+        }
+    }
 
+    template<typename comp, typename it>
+    void thread_sort_step(it first, it last, int sort_width, int block_width, direction start_dir) {
+        direction dir = start_dir;
+        it curr = first;
+        int pos = 0;
+        while (curr != last) {
+            it sort_end = curr + sort_width;
+            it half     = curr + (sort_width / 2);
+            pos += sort_width;
+            sort_step<comp, it>(curr, half, sort_end, dir);
+            curr = sort_end;
+            if (pos >= block_width) {
+                dir = swap_direction(dir);
+                pos = 0;
+            }
+        }
+    }
+
+    template<typename comp, typename it>
+    void sort_block(sort_arg<it> *arg, int block_width) {
+        auto range = get_range(arg, block_width);
+        for (int sort_width = block_width; sort_width > 1; sort_width /= 2) {
+            bool working_thread = range.first < arg->arr_len_;
+            if (working_thread) {
+                direction start_dir = get_range_start_dir(range.first, block_width);
+                it first = arg->first_ + range.first;
+                it last  = arg->first_ + range.second;
+                thread_sort_step<comp, it>(first, last, sort_width, block_width, start_dir);
+            }
+            pthread_barrier_wait(arg->barrier_);
+        }
+    }
+
+    template<typename comp, typename it>
+    void* sort_executor(void *args) {
+        sort_arg<it>* arg = static_cast<sort_arg<it>*>(args);
+
+        for (int block_width = 2; block_width <= arg->arr_len_; block_width *= 2)
+            sort_block<comp, it>(arg, block_width);
+
+        return NULL;
+    }
+
+} // <-- namespace detail
+
+    // first version works only with lengths 2^n and 2^m processor amount
+    template<typename comp, typename it>
+    void bitonic_sort(it first, it last, int threadc, comp) {
         using arg_t = detail::sort_arg<it>;
         std::vector<pthread_t> threads(threadc);
         std::vector<arg_t> args;
@@ -117,9 +121,7 @@ namespace bitonic_sort {
         pthread_barrier_t barrier;
         pthread_barrier_init(&barrier, NULL, threadc);
 
-        // first version works only with lengths 2^n and 2^m processor amount
         int arr_len = std::distance(first, last);
-        std::cout << "input length = " << arr_len << std::endl;
 
         for (int i = 0; i < threadc; ++i)
             args.emplace_back(&barrier, first, last, i, threadc, arr_len);

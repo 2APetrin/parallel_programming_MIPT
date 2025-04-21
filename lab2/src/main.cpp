@@ -7,7 +7,7 @@
 #include <iostream>
 
 int main(int argc, char *argv[]) {
-    namespace bc = bitonic_sort;
+    namespace bs = bitonic_sort;
 
     if (argc < 3) return 1;
     int threadc = std::stoi(argv[1]);
@@ -21,11 +21,7 @@ int main(int argc, char *argv[]) {
         std::istream_iterator<int>()
     };
 
-    for (auto &&i : array)
-        std::cout << i << " ";
-    std::cout << std::endl;
-
-    bc::bitonic_sort<std::less<int>, std::vector<int>::iterator>(array.begin(), array.end(), threadc);
+    bs::bitonic_sort(array.begin(), array.end(), threadc, std::less<int>());
 
     for (auto &&i : array)
         std::cout << i << " ";
