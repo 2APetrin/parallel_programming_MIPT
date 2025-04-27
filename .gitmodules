@@ -1,0 +1,3 @@
+[submodule "lab2/pthread_bitonic_sort"]
+	path = lab2/pthread_bitonic_sort
+	url = https://github.com/2APetrin/pthread_bitonic_sort
